@@ -5,13 +5,15 @@ import pandas as pd
 import json
 import shutil
 from ando.AnDOChecker import is_valid
+from tqdm import tqdm
+
 
 REQ_FILES = dict(description='dataset_description.json',
                  participant='participants.tsv',
                  session='{subject_label}\\{subject_label}_sessions.tsv',
                  channels='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_channels.tsv',
                  contacts='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_contacts.tsv',
-                 epyhs='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_ephys.json',
+                 ephys='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_ephys.json',
                  probes='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_probes.tsv',
                  file='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_ephys{file_type}')
 
@@ -37,57 +39,68 @@ class BidsConverter(ABC):
         self._datafiles_io = self._datafiles_open()
         self._datafiles = [file.read() for file in self._datafiles_io]
         self._labels_dict = defaultdict(list)
+        self.extract_metadata()
 
     @abstractmethod
     def _datafiles_open(self):
         pass
-    
+
     def __del__(self):
         for file in self._datafiles_io:
             file.close()
 
+    def _tqdm(self, tqdm_obj, desc):
+        t=tqdm(tqdm_obj)
+        t.set_description(desc)
+        return t
+
     def _create_participant_df(self):
-        df = pd.DataFrame()
-        for file in self._datafiles:
-            participant_info_dict = self._get_participant_info(file)
-            sub_label = participant_info_dict('ParticipantID')
+        participants_df = None
+        for file in self._tqdm(self._datafiles, 'participant'):
+            participant_df = self._get_participant_info(file)
+            sub_label = participant_df['ParticipantID'][0]
             if sub_label not in self._labels_dict:
+                if participants_df is None:
+                    participants_df = participant_df
+                else:
+                    participants_df=participants_df.append(participant_df)
                 self._labels_dict[sub_label] = []
-                df.append(participant_info_dict)
-        self._participants_dict=self._get_default_dict('participant', data=df)
+        self._participants_dict=self._get_default_dict('participant', data=participants_df)['']
 
     def _create_description_json(self):
-        self._dataset_desc_json = self._get_default_dict('participant',
-                                                         data=self._get_dataset_info())
+        self._dataset_desc_json = self._get_default_dict('description',
+                                                         data=self._get_dataset_info(self._datafiles[0]))['']
 
     def _create_session_df(self):
-        for file in self._datafiles:
+        for file in self._tqdm(self._datafiles, 'session'):
             subject_name = self._get_subject_label(file)
             session_label = self._get_session_label(file)
-            session_df = self._get_session_info()
-            sessions_df = self._sessions_dict.get(subject_name, pd.DataFrame(columns=session_df.columns))
+            session_df = self._get_session_info(file)
+            sessions_df = self._sessions_dict.get(subject_name,
+                                                  dict(data=pd.DataFrame(
+                                                      columns=session_df.columns)))['data']
             if not sessions_df['session_id'].str.contains(session_label).any():
-                sessions_df.append(session_df)
+                sessions_df = sessions_df.append(session_df)
                 self._labels_dict[subject_name].append(session_label)
             self._sessions_dict[subject_name] = self._get_default_dict(
-                'subject', subject_name, session_label, data=sessions_df)[session_label]
+                'session', subject_name, session_label, data=sessions_df)[session_label]
 
     def _create_sessionlevel_data(self):
-        for no, file in enumerate(self._datafiles):
+        for no, file in enumerate(self._tqdm(self._datafiles, 'sessionlevel')):
             subject_name = self._get_subject_label(file)
             session_label = self._get_session_label(file)
-            self._probes_dict[subject_name] = self._get_default_dict(
-                'probes', subject_name, session_label, data=self._get_probes_info(file))
-            self._ephys_dict[subject_name] = self._get_default_dict(
-                'ephys', subject_name, session_label, data=self._get_ephys_info(file))
-            self._channels_dict[subject_name] = self._get_default_dict(
-                'channels', subject_name, session_label, data=self._get_channels_info(file))
-            self._contacts_dict[subject_name] = self._get_default_dict(
-                'contacts', subject_name, session_label, data=self._get_contacts_info(file))
-            self._file_name_dict[subject_name] = self._get_default_dict(
-                'file', subject_name, session_label, data=self.datafiles_list[no])
+            self._probes_dict[subject_name].update(self._get_default_dict(
+                'probes', subject_name, session_label, data=self._get_probes_info(file)))
+            self._ephys_dict[subject_name].update(self._get_default_dict(
+                'ephys', subject_name, session_label, data=self._get_ephys_info(file)))
+            self._channels_dict[subject_name].update(self._get_default_dict(
+                'channels', subject_name, session_label, data=self._get_channels_info(file)))
+            self._contacts_dict[subject_name].update(self._get_default_dict(
+                'contacts', subject_name, session_label, data=self._get_contacts_info(file)))
+            self._file_name_dict[subject_name].update(self._get_default_dict(
+                'file', subject_name, session_label, data=self.datafiles_list[no]))
 
-    def _get_default_dict(self, key, subject_label, session_label, data=None):
+    def _get_default_dict(self, key, subject_label='', session_label='', data=None):
         return {session_label: dict(
             name=REQ_FILES[key].format(subject_label=subject_label,
                                        session_label=session_label,
@@ -150,33 +163,30 @@ class BidsConverter(ABC):
                     contacts=self._contacts_dict,
                     file=self._file_name_dict)
 
-    def _write_participant_tsv(self):
-        self._write_tsv(
-            self._create_participant_df()['data'],
-            self.output_path/self._create_participant_df()['name'])
-
-
     @staticmethod
     def _write_tsv(data, write_path):
-        assert isinstance(data, pd.Dataframe), f'{data} should be a df'
+        write_path.parent.mkdir(parents=True, exist_ok=True)
+        assert isinstance(data, pd.DataFrame), f'{data} should be a df'
         if not write_path.exists():
             data.dropna(axis='columns', how='all', inplace=True)
             data.to_csv(write_path, sep='\t', index=False)
 
     @staticmethod
     def _write_json(data, write_path):
+        write_path.parent.mkdir(parents=True, exist_ok=True)
         assert isinstance(data, dict), f'{data} should be a dict'
         if not write_path.exists():
-            with open(write_path) as j:
+            with open(write_path,'w') as j:
                 json.dump(data,j)
 
     @staticmethod
     def _move_data_file(source, dest, move=True):
+        dest.parent.mkdir(parents=True, exist_ok=True)
         if move:
-            if not source.exists():
+            if not dest.exists():
                 source.replace(dest)
         else:
-            if not source.exists():
+            if not dest.exists():
                 dest.symlink_to(source)
 
     def organize(self, output_path=None, move_file=False,

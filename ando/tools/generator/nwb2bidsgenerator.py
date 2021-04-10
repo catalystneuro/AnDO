@@ -11,12 +11,13 @@ from .bidsconverter import BidsConverter
 
 class NwbToBIDS(BidsConverter):
 
+    file_type = '.nwb'
+
     def __init__(self, dataset_path, **kwargs):
         super().__init__(dataset_path, **kwargs)
-        self.extract_metadata()
 
     def _datafiles_open(self):
-        return [NWBHDF5IO(file,'r') for file in self.datafiles_list]
+        return [NWBHDF5IO(str(file),'r') for file in self._tqdm(self.datafiles_list,'reading nwbfiles')]
 
     def _get_subject_label(self, file, subject_suffix=''):
         if file.subject is not None:
@@ -45,9 +46,9 @@ class NwbToBIDS(BidsConverter):
         if nwbfile.subject is not None:
             sb = nwbfile.subject
             df_row = [sb.species, subject_label, sb.sex[0] if sb.sex is not None else None,
-                    sb.date_of_birth, sb.age, sb.genotype, sb.weight], subject_label
+                    sb.date_of_birth, sb.age, sb.genotype, sb.weight]
         else:
-            df_row = [None, subject_label, None, None, None, None, None], subject_label
+            df_row = [None, subject_label, None, None, None, None, None]
         participant_df.loc[0] = df_row
         return participant_df
 
@@ -66,7 +67,7 @@ class NwbToBIDS(BidsConverter):
         session_label = self._get_session_label(nwbfile)
         session_df = pd.DataFrame(
             columns=['session_id', '#_trials', 'comment'],
-            data=[session_label, trials_len, nwbfile.session_description])
+            data=[[session_label, trials_len, nwbfile.session_description]])
         return session_df
 
     @staticmethod
