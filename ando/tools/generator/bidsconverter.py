@@ -1,32 +1,230 @@
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
+import pandas as pd
+import json
+import shutil
+from ando.AnDOChecker import is_valid
+
+REQ_FILES = dict(description='dataset_description.json',
+                 participant='participants.tsv',
+                 session='{subject_label}\\{subject_label}_sessions.tsv',
+                 channels='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_channels.tsv',
+                 contacts='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_contacts.tsv',
+                 epyhs='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_ephys.json',
+                 probes='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_probes.tsv',
+                 file='{subject_label}\\{session_label}\\ephys\\{subject_label}_{session_label}_ephys{file_type}')
 
 
 class BidsConverter(ABC):
 
+    file_type = ''
+    
     def __init__(self, dataset_path, **kwargs):
         self.dataset_path = Path(dataset_path)
+        self.output_path = self.dataset_path.parent/'BIDSExt'/self.dataset_path.name
         self._kwargs = kwargs
-        self._participants_dict = dict(name=Path('participants.tsv'),
-                                       data=None)
-        self._dataset_desc_json = dict(name=Path('dataset_description.json'),
-                                       data=None)
+        self._participants_dict = dict()
+        self._dataset_desc_json = dict()
         self._sessions_dict = defaultdict(dict)
         self._channels_dict = defaultdict(dict)
         self._contacts_dict = defaultdict(dict)
         self._ephys_dict = defaultdict(dict)
         self._probes_dict = defaultdict(dict)
-        self._nwbfile_name_dict = defaultdict(dict)
-        self.datafiles_list = []
+        self._file_name_dict = defaultdict(dict)
+        self.datafiles_list = list(self.dataset_path.glob(f'**/*{self.file_type}'))
+        assert len(self.datafiles_list) > 0, f'no files of type {self.file_type} found'
+        self._datafiles_io = self._datafiles_open()
+        self._datafiles = [file.read() for file in self._datafiles_io]
+        self._labels_dict = defaultdict(list)
 
     @abstractmethod
-    def _extract_metadata(self):
+    def _datafiles_open(self):
+        pass
+    
+    def __del__(self):
+        for file in self._datafiles_io:
+            file.close()
+
+    def _create_participant_df(self):
+        df = pd.DataFrame()
+        for file in self._datafiles:
+            participant_info_dict = self._get_participant_info(file)
+            sub_label = participant_info_dict('ParticipantID')
+            if sub_label not in self._labels_dict:
+                self._labels_dict[sub_label] = []
+                df.append(participant_info_dict)
+        self._participants_dict=self._get_default_dict('participant', data=df)
+
+    def _create_description_json(self):
+        self._dataset_desc_json = self._get_default_dict('participant',
+                                                         data=self._get_dataset_info())
+
+    def _create_session_df(self):
+        for file in self._datafiles:
+            subject_name = self._get_subject_label(file)
+            session_label = self._get_session_label(file)
+            session_df = self._get_session_info()
+            sessions_df = self._sessions_dict.get(subject_name, pd.DataFrame(columns=session_df.columns))
+            if not sessions_df['session_id'].str.contains(session_label).any():
+                sessions_df.append(session_df)
+                self._labels_dict[subject_name].append(session_label)
+            self._sessions_dict[subject_name] = self._get_default_dict(
+                'subject', subject_name, session_label, data=sessions_df)[session_label]
+
+    def _create_sessionlevel_data(self):
+        for no, file in enumerate(self._datafiles):
+            subject_name = self._get_subject_label(file)
+            session_label = self._get_session_label(file)
+            self._probes_dict[subject_name] = self._get_default_dict(
+                'probes', subject_name, session_label, data=self._get_probes_info(file))
+            self._ephys_dict[subject_name] = self._get_default_dict(
+                'ephys', subject_name, session_label, data=self._get_ephys_info(file))
+            self._channels_dict[subject_name] = self._get_default_dict(
+                'channels', subject_name, session_label, data=self._get_channels_info(file))
+            self._contacts_dict[subject_name] = self._get_default_dict(
+                'contacts', subject_name, session_label, data=self._get_contacts_info(file))
+            self._file_name_dict[subject_name] = self._get_default_dict(
+                'file', subject_name, session_label, data=self.datafiles_list[no])
+
+    def _get_default_dict(self, key, subject_label, session_label, data=None):
+        return {session_label: dict(
+            name=REQ_FILES[key].format(subject_label=subject_label,
+                                       session_label=session_label,
+                                       file_type=self.file_type),
+            data=data)}
+
+    @abstractmethod
+    def _get_subject_label(self, file):
+        pass
+
+
+    @abstractmethod
+    def _get_session_label(self, file):
         pass
 
     @abstractmethod
-    def organize(self):
+    def _get_participant_info(self, file):
         pass
+
+    @staticmethod
+    @abstractmethod
+    def _get_dataset_info(file):
+        pass
+
+    @abstractmethod
+    def _get_session_info(self, file):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def _get_contacts_info(file):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def _get_channels_info(file):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def _get_ephys_info(file):
+        pass
+
+    @staticmethod
+    @abstractmethod
+    def _get_probes_info(file):
+        pass
+
+    def extract_metadata(self):
+        self._create_participant_df()
+        self._create_session_df()
+        self._create_sessionlevel_data()
+        self._create_description_json()
+        return dict(description=self._dataset_desc_json,
+                    sessions=self._sessions_dict,
+                    participant=self._participants_dict,
+                    probes=self._probes_dict,
+                    ephys=self._ephys_dict,
+                    channels=self._channels_dict,
+                    contacts=self._contacts_dict,
+                    file=self._file_name_dict)
+
+    def _write_participant_tsv(self):
+        self._write_tsv(
+            self._create_participant_df()['data'],
+            self.output_path/self._create_participant_df()['name'])
+
+
+    @staticmethod
+    def _write_tsv(data, write_path):
+        assert isinstance(data, pd.Dataframe), f'{data} should be a df'
+        if not write_path.exists():
+            data.dropna(axis='columns', how='all', inplace=True)
+            data.to_csv(write_path, sep='\t', index=False)
+
+    @staticmethod
+    def _write_json(data, write_path):
+        assert isinstance(data, dict), f'{data} should be a dict'
+        if not write_path.exists():
+            with open(write_path) as j:
+                json.dump(data,j)
+
+    @staticmethod
+    def _move_data_file(source, dest, move=True):
+        if move:
+            if not source.exists():
+                source.replace(dest)
+        else:
+            if not source.exists():
+                dest.symlink_to(source)
+
+    def organize(self, output_path=None, move_file=False,
+                 re_write=True, validate=True):
+        if output_path is not None:
+            self.output_path = Path(output_path)
+        if re_write and self.output_path.exists():
+            shutil.rmtree(self.output_path)
+        self.output_path.mkdir(parents=True, exist_ok=True)
+        data, loc = self._parse_data_dict(
+            self._participants_dict,
+            self.output_path)
+        self._write_tsv(data, loc)
+        data, loc = self._parse_data_dict(
+            self._dataset_desc_json,
+            self.output_path)
+        self._write_json(data, loc)
+        for participant, sessions in self._labels_dict.items():
+            data, loc = self._parse_data_dict(
+                self._sessions_dict[participant],
+                self.output_path)
+            self._write_tsv(data, loc)
+            for session in sessions:
+                data, loc = self._parse_data_dict(
+                    self._channels_dict[participant][session],
+                    self.output_path)
+                self._write_tsv(data,loc)
+                data, loc = self._parse_data_dict(
+                    self._probes_dict[participant][session],
+                    self.output_path)
+                self._write_tsv(data, loc)
+                data, loc = self._parse_data_dict(
+                    self._contacts_dict[participant][session],
+                    self.output_path)
+                self._write_tsv(data, loc)
+                data, loc = self._parse_data_dict(
+                    self._ephys_dict[participant][session],
+                    self.output_path)
+                self._write_json(data, loc)
+                data, loc = self._parse_data_dict(
+                    self._file_name_dict[participant][session],
+                    self.output_path)
+                self._move_data_file(data, loc, move=move_file)
+        if validate:
+            is_valid(self.output_path)
+
+    def _parse_data_dict(self, data_dict, output_path):
+        return data_dict['data'], output_path/data_dict['name']
 
     def get_subject_names(self):
         return list(self._participants_dict['data']['ParticipantID'])
