@@ -4,19 +4,17 @@ import pandas as pd
 from pynwb import NWBHDF5IO
 from pynwb.ecephys import ElectricalSeries
 
-
 from .bidsconverter import BidsConverter
 
 
 class NwbToBIDS(BidsConverter):
-
     file_type = '.nwb'
 
     def __init__(self, dataset_path, **kwargs):
         super().__init__(dataset_path, **kwargs)
 
     def _datafiles_open(self):
-        return [NWBHDF5IO(str(file),'r') for file in self._tqdm(self.datafiles_list,'reading nwbfiles')]
+        return [NWBHDF5IO(str(file), 'r') for file in self._tqdm(self.datafiles_list, 'reading nwbfiles')]
 
     def _get_subject_label(self, file, subject_suffix=''):
         if file.subject is not None:
@@ -45,7 +43,7 @@ class NwbToBIDS(BidsConverter):
         if nwbfile.subject is not None:
             sb = nwbfile.subject
             df_row = [sb.species, subject_label, sb.sex[0] if sb.sex is not None else None,
-                    sb.date_of_birth, sb.age, sb.genotype, sb.weight]
+                      sb.date_of_birth, sb.age, sb.genotype, sb.weight]
         else:
             df_row = [None, subject_label, None, None, None, None, None]
         participant_df.loc[0] = df_row

@@ -1,12 +1,13 @@
+import json
+import shutil
 from abc import ABC, abstractmethod
 from collections import defaultdict
 from pathlib import Path
+
 import pandas as pd
-import json
-import shutil
-from ando.AnDOChecker import is_valid
 from tqdm import tqdm
 
+from ando.AnDOChecker import is_valid
 
 REQ_FILES = dict(description='dataset_description.json',
                  participant='participants.tsv',
@@ -19,9 +20,8 @@ REQ_FILES = dict(description='dataset_description.json',
 
 
 class BidsConverter(ABC):
-
     file_type = ''
-    
+
     def __init__(self, dataset_path, **kwargs):
         self.dataset_path = Path(dataset_path)
         self.output_path = self.dataset_path.parent/'BIDSExt'/self.dataset_path.name
@@ -50,7 +50,7 @@ class BidsConverter(ABC):
             file.close()
 
     def _tqdm(self, tqdm_obj, desc):
-        t=tqdm(tqdm_obj)
+        t = tqdm(tqdm_obj)
         t.set_description(desc)
         return t
 
@@ -63,9 +63,9 @@ class BidsConverter(ABC):
                 if participants_df is None:
                     participants_df = participant_df
                 else:
-                    participants_df=participants_df.append(participant_df)
+                    participants_df = participants_df.append(participant_df)
                 self._labels_dict[sub_label] = []
-        self._participants_dict=self._get_default_dict('participant', data=participants_df)['']
+        self._participants_dict = self._get_default_dict('participant', data=participants_df)['']
 
     def _create_description_json(self):
         self._dataset_desc_json = self._get_default_dict('description',
@@ -110,7 +110,6 @@ class BidsConverter(ABC):
     @abstractmethod
     def _get_subject_label(self, file):
         pass
-
 
     @abstractmethod
     def _get_session_label(self, file):
@@ -176,8 +175,8 @@ class BidsConverter(ABC):
         write_path.parent.mkdir(parents=True, exist_ok=True)
         assert isinstance(data, dict), f'{data} should be a dict'
         if not write_path.exists():
-            with open(write_path,'w') as j:
-                json.dump(data,j)
+            with open(write_path, 'w') as j:
+                json.dump(data, j)
 
     @staticmethod
     def _move_data_file(source, dest, move=True):
@@ -213,7 +212,7 @@ class BidsConverter(ABC):
                 data, loc = self._parse_data_dict(
                     self._channels_dict[participant][session],
                     self.output_path)
-                self._write_tsv(data,loc)
+                self._write_tsv(data, loc)
                 data, loc = self._parse_data_dict(
                     self._probes_dict[participant][session],
                     self.output_path)
