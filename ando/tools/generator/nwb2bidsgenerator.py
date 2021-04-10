@@ -3,7 +3,6 @@ import re
 import pandas as pd
 from pynwb import NWBHDF5IO
 from pynwb.ecephys import ElectricalSeries
-from tqdm import tqdm
 
 
 from .bidsconverter import BidsConverter
