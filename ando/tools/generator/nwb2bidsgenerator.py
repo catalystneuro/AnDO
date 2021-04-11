@@ -3,6 +3,7 @@ import re
 import pandas as pd
 from pynwb import NWBHDF5IO
 from pynwb.ecephys import ElectricalSeries
+from tqdm import tqdm
 
 from .bidsconverter import BidsConverter
 
@@ -16,7 +17,7 @@ class NwbToBIDS(BidsConverter):
     def _datafiles_open(self):
         return [
             NWBHDF5IO(str(file), "r")
-            for file in self._tqdm(self.datafiles_list, "reading nwbfiles")
+            for file in tqdm(self.datafiles_list, desc="reading nwbfiles")
         ]
 
     def _get_subject_label(self, file, subject_suffix=""):

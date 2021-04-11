@@ -51,14 +51,9 @@ class BidsConverter(ABC):
         for file in self._datafiles_io:
             file.close()
 
-    def _tqdm(self, tqdm_obj, desc):
-        t = tqdm(tqdm_obj)
-        t.set_description(desc)
-        return t
-
     def _create_participant_df(self):
         participants_df = None
-        for file in self._tqdm(self._datafiles, "participant"):
+        for file in tqdm(self._datafiles, desc="participant"):
             participant_df = self._get_participant_info(file)
             sub_label = participant_df["ParticipantID"][0]
             if sub_label not in self._labels_dict:
@@ -77,7 +72,7 @@ class BidsConverter(ABC):
         )[""]
 
     def _create_session_df(self):
-        for file in self._tqdm(self._datafiles, "session"):
+        for file in tqdm(self._datafiles, desc="session"):
             subject_name = self._get_subject_label(file)
             session_label = self._get_session_label(file)
             session_df = self._get_session_info(file)
@@ -92,7 +87,7 @@ class BidsConverter(ABC):
             )[session_label]
 
     def _create_sessionlevel_data(self):
-        for no, file in enumerate(self._tqdm(self._datafiles, "sessionlevel")):
+        for no, file in enumerate(tqdm(self._datafiles, desc="sessionlevel")):
             subject_name = self._get_subject_label(file)
             session_label = self._get_session_label(file)
             self._probes_dict[subject_name].update(
